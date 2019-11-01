@@ -9,14 +9,32 @@ import numpy as np
 import numpy
 import networks
 from my_args import  args
-
+from flow_utils import read_flow_file, pad_image_for_divisibility, read_image
 from scipy.misc import imread, imsave
 from AverageMeter import  *
 import glob
-from get_triplet_filepaths import get_triplet_filepaths
+from get_triplet_filepaths import get_triplet_filepaths, get_pair_filepaths
 
 torch.backends.cudnn.benchmark = False # to speed up the
 
+write_depth_image = False
+
+# # Middlebury.
+# input_dir = '/scratch/gobi2/tianxingli/raw_data/middlebury-other/other-combined'
+# output_dir = '/scratch/gobi2/tianxingli/interp_eval/middlebury/dain'
+
+# # Hinted val set.
+# triplet_filepaths = get_triplet_filepaths(input_dir, output_dir)
+# input_dir = '/h/tianxingli/hinted_val_set'
+# output_dir = '/scratch/gobi2/tianxingli/interp_eval/hinted_val_set/dain_weights'
+
+# # Depth val set.
+# input_dir = '/scratch/gobi2/tianxingli/raw_data/depth_val_set'
+# output_dir = '/scratch/gobi2/tianxingli/interp_eval/depth_val_set/dain'
+# triplet_filepaths = get_pair_filepaths(input_dir, output_dir)
+# write_depth_image = True
+
+# HD dataset.
 input_dir = '/scratch/gobi2/tianxingli/raw_data/HD_dataset_frames'
 output_dir = '/scratch/gobi2/tianxingli/interp_eval/hd/dain'
 triplet_filepaths = get_triplet_filepaths(input_dir, output_dir)
@@ -74,8 +92,22 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
     if not os.path.exists(cur_output_dir):
         os.makedirs(cur_output_dir, exist_ok=True)
 
-    X0 =  torch.from_numpy( np.transpose(imread(arguments_strFirst) , (2,0,1)).astype("float32")/ 255.0).type(dtype)
-    X1 =  torch.from_numpy( np.transpose(imread(arguments_strSecond) , (2,0,1)).astype("float32")/ 255.0).type(dtype)
+    fw_flow_file_path = arguments_strFirst[:-4] + '_fw.flo'
+    bw_flow_file_path = arguments_strSecond[:-4] + '_bw.flo'
+    flow_0_t = None
+    flow_1_t = None
+    if os.path.exists(fw_flow_file_path):
+        assert os.path.exists(bw_flow_file_path)
+        # Pytorch needs [C, H, W].
+        flow_0_1 = read_flow_file(fw_flow_file_path)
+        flow_1_0 = read_flow_file(bw_flow_file_path)
+        flow_0_1 = np.transpose(flow_0_1, axes=[2, 0, 1])
+        flow_1_0 = np.transpose(flow_1_0, axes=[2, 0, 1])
+        flow_0_t = torch.from_numpy(0.5 * flow_0_1).float().cuda()
+        flow_1_t = torch.from_numpy(0.5 * flow_1_0).float().cuda()
+
+    X0 =  torch.from_numpy( np.transpose(read_image(arguments_strFirst), (2,0,1)).astype("float32")/ 255.0).type(dtype)
+    X1 =  torch.from_numpy( np.transpose(read_image(arguments_strSecond), (2,0,1)).astype("float32")/ 255.0).type(dtype)
     y_ = torch.FloatTensor()
 
     assert (X0.size(1) == X1.size(1))
@@ -88,7 +120,8 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
         continue
 
     if intWidth != ((intWidth >> 7) << 7):
-        intWidth_pad = (((intWidth >> 7) + 1) << 7)  # more than necessary
+        # intWidth_pad = ((np.ceil(intWidth >> 7)) << 7)  # more than necessary
+        intWidth_pad = int(2 ** 7 * np.ceil(float(intWidth) / 2 ** 7))
         intPaddingLeft =int(( intWidth_pad - intWidth)/2)
         intPaddingRight = intWidth_pad - intWidth - intPaddingLeft
     else:
@@ -97,7 +130,8 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
         intPaddingRight= 32
 
     if intHeight != ((intHeight >> 7) << 7):
-        intHeight_pad = (((intHeight >> 7) + 1) << 7)  # more than necessary
+        # intHeight_pad = ((np.ceil(intHeight >> 7)) << 7)  # more than necessary
+        intHeight_pad = int(2 ** 7 * np.ceil(float(intHeight) / 2 ** 7))
         intPaddingTop = int((intHeight_pad - intHeight) / 2)
         intPaddingBottom = intHeight_pad - intHeight - intPaddingTop
     else:
@@ -112,12 +146,17 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
     X1 = Variable(torch.unsqueeze(X1,0))
     X0 = pader(X0)
     X1 = pader(X1)
+    if flow_0_t is not None:
+        flow_0_t = Variable(torch.unsqueeze(flow_0_t, 0))
+        flow_1_t = Variable(torch.unsqueeze(flow_1_t, 0))
+        flow_0_t = pader(flow_0_t)
+        flow_1_t = pader(flow_1_t)
 
     if use_cuda:
         X0 = X0.cuda()
         X1 = X1.cuda()
     proc_end = time.time()
-    y_s,offset,filter = model(torch.stack((X0, X1),dim = 0))
+    y_s,offset,filter,depth_inv = model(torch.stack((X0, X1),dim = 0), flow_0_t=flow_0_t, flow_1_t=flow_1_t)
     y_ = y_s[save_which]
 
     proc_timer.update(time.time() -proc_end)
@@ -129,6 +168,7 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
         y_ = y_.data.cpu().numpy()
         offset = [offset_i.data.cpu().numpy() for offset_i in offset]
         filter = [filter_i.data.cpu().numpy() for filter_i in filter]  if filter[0] is not None else None
+        depth_inv = [depth_inv_i.data.cpu().numpy() for depth_inv_i in depth_inv]
         X1 = X1.data.cpu().numpy()
     else:
         X0 = X0.data.numpy()
@@ -140,4 +180,8 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
     X0 = np.transpose(255.0 * X0.clip(0,1.0)[0, :, intPaddingTop:intPaddingTop+intHeight, intPaddingLeft: intPaddingLeft+intWidth], (1, 2, 0))
     y_ = np.transpose(255.0 * y_.clip(0,1.0)[0, :, intPaddingTop:intPaddingTop+intHeight, intPaddingLeft: intPaddingLeft+intWidth], (1, 2, 0))
     imsave(arguments_strOut, np.round(y_).astype(numpy.uint8))
+    print('Writing image to', arguments_strOut)
+    if write_depth_image:
+        imsave(arguments_strOut[:-4] + '_weights_0.png', depth_inv[0][0][0][intPaddingTop:intPaddingTop+intHeight, intPaddingLeft: intPaddingLeft+intWidth])
+        imsave(arguments_strOut[:-4] + '_weights_1.png', depth_inv[1][0][0][intPaddingTop:intPaddingTop+intHeight, intPaddingLeft: intPaddingLeft+intWidth])
 

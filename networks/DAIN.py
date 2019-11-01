@@ -78,7 +78,7 @@ class DAIN(torch.nn.Module):
             #     print(m)
 
 
-    def forward(self, input):
+    def forward(self, input, flow_0_t=None, flow_1_t=None):
 
         """
         Parameters
@@ -143,14 +143,18 @@ class DAIN(torch.nn.Module):
 
             depth_inv = [1e-6 + 1 / torch.exp(d) for d in log_depth]
 
-        with torch.cuda.stream(s2):
-            for _ in range(1):
-                cur_offset_outputs = [
-                        self.forward_flownets(self.flownets, cur_offset_input, time_offsets=time_offsets),
-                        self.forward_flownets(self.flownets, torch.cat((cur_offset_input[:, 3:, ...],
-                                            cur_offset_input[:, 0:3, ...]), dim=1),
-                                  time_offsets=time_offsets[::-1])
-                        ]
+        if flow_0_t is None:
+            with torch.cuda.stream(s2):
+                for _ in range(1):
+                    cur_offset_outputs = [
+                            self.forward_flownets(self.flownets, cur_offset_input, time_offsets=time_offsets),
+                            self.forward_flownets(self.flownets, torch.cat((cur_offset_input[:, 3:, ...],
+                                                cur_offset_input[:, 0:3, ...]), dim=1),
+                                      time_offsets=time_offsets[::-1])
+                            ]
+        else:
+            print('Using externally provided flows...')
+            cur_offset_outputs = [[flow_0_t], [flow_1_t]]
 
         torch.cuda.synchronize() #synchronize s1 and s2
 
@@ -192,7 +196,7 @@ class DAIN(torch.nn.Module):
             return losses, offsets,filters,occlusions
         else:
             cur_outputs = [cur_output,cur_output_rectified]
-            return cur_outputs,cur_offset_output,cur_filter_output
+            return cur_outputs,cur_offset_output,cur_filter_output,depth_inv
 
     def forward_flownets(self, model, input, time_offsets = None):
 
@@ -206,6 +210,7 @@ class DAIN(torch.nn.Module):
 
         temps = [self.div_flow * temp * time_offset for time_offset in time_offsets]# single direction to bidirection should haven it.
         temps = [nn.Upsample(scale_factor=4, mode='bilinear')(temp)  for temp in temps]# nearest interpolation won't be better i think
+        # print(temps[0].data.cpu().numpy().shape)
         return temps
 
     '''keep this function'''
