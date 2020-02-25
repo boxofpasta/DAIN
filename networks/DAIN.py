@@ -107,7 +107,6 @@ class DAIN(torch.nn.Module):
             assert input.size(0) ==2
             input_0,input_2 = torch.squeeze(input,dim=0)
 
-
         #prepare the input data of current scale
         cur_input_0 = input_0
         if self.training == True:

@@ -22,11 +22,12 @@ write_depth_image = False
 # # Middlebury.
 # input_dir = '/scratch/gobi2/tianxingli/raw_data/middlebury-other/other-combined'
 # output_dir = '/scratch/gobi2/tianxingli/interp_eval/middlebury/dain'
-
-# # Hinted val set.
 # triplet_filepaths = get_triplet_filepaths(input_dir, output_dir)
-# input_dir = '/h/tianxingli/hinted_val_set'
-# output_dir = '/scratch/gobi2/tianxingli/interp_eval/hinted_val_set/dain_weights'
+
+# Hinted val set.
+# input_dir = '/h/tianxingli/paper_examples/suppl_examples'
+# output_dir = '/scratch/gobi2/tianxingli/interp_eval/hinted_val_set/dain_paper_suppl_examples'
+# triplet_filepaths = get_pair_filepaths(input_dir, output_dir)
 
 # # Depth val set.
 # input_dir = '/scratch/gobi2/tianxingli/raw_data/depth_val_set'
@@ -34,11 +35,15 @@ write_depth_image = False
 # triplet_filepaths = get_pair_filepaths(input_dir, output_dir)
 # write_depth_image = True
 
-# HD dataset.
-input_dir = '/scratch/gobi2/tianxingli/raw_data/HD_dataset_frames'
-output_dir = '/scratch/gobi2/tianxingli/interp_eval/hd/dain'
-triplet_filepaths = get_triplet_filepaths(input_dir, output_dir)
+# # DAVIS-2017 dataset.
+# input_dir = '/scratch/gobi2/tianxingli/raw_data/DAVIS_2017_test_dev/JPEGImages/480p'
+# output_dir = '/scratch/gobi2/tianxingli/interp_eval/DAVIS_2017/dain'
+# triplet_filepaths = get_triplet_filepaths(input_dir, output_dir)
 
+# Creative Flow (hinted).
+input_dir = '/scratch/gobi2/tianxingli/raw_data/creative_test_split'
+output_dir = '/scratch/gobi2/tianxingli/interp_eval/creative_test_split/dain'
+triplet_filepaths = get_triplet_filepaths(input_dir, output_dir)
 
 model = networks.__dict__[args.netName](channel=args.channels,
                             filter_size = args.filter_size,
@@ -85,15 +90,19 @@ proc_timer = AverageMeter()
 end = time.time()
 i = 0
 
+torch.set_grad_enabled(False)
+
 for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filepaths:
     i += 1
-    print('Evaluating %d out of %d' % (i, len(triplet_filepaths)))
+    print('Evaluating %d out of %d: %s' % (i, len(triplet_filepaths), arguments_strOut))
     cur_output_dir = os.path.dirname(arguments_strOut)
     if not os.path.exists(cur_output_dir):
         os.makedirs(cur_output_dir, exist_ok=True)
 
-    fw_flow_file_path = arguments_strFirst[:-4] + '_fw.flo'
-    bw_flow_file_path = arguments_strSecond[:-4] + '_bw.flo'
+    # fw_flow_file_path = arguments_strFirst[:-4] + '_fw.flo'
+    # bw_flow_file_path = arguments_strSecond[:-4] + '_bw.flo'
+    fw_flow_file_path = os.path.join(os.path.dirname(arguments_strFirst), 'flow_02.flo')
+    bw_flow_file_path = os.path.join(os.path.dirname(arguments_strSecond), 'flow_20.flo')
     flow_0_t = None
     flow_1_t = None
     if os.path.exists(fw_flow_file_path):
@@ -119,9 +128,27 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
     if not channel == 3:
         continue
 
+    # if intWidth != ((intWidth >> 7) << 7):
+    #     # intWidth_pad = ((np.ceil(intWidth >> 7)) << 7)  # more than necessary
+    #     intWidth_pad = int(2 ** 7 * np.ceil(float(intWidth) / 2 ** 7))
+    #     intPaddingLeft =int(( intWidth_pad - intWidth)/2)
+    #     intPaddingRight = intWidth_pad - intWidth - intPaddingLeft
+    # else:
+    #     intWidth_pad = intWidth
+    #     intPaddingLeft = 32
+    #     intPaddingRight= 32
+    #
+    # if intHeight != ((intHeight >> 7) << 7):
+    #     # intHeight_pad = ((np.ceil(intHeight >> 7)) << 7)  # more than necessary
+    #     intHeight_pad = int(2 ** 7 * np.ceil(float(intHeight) / 2 ** 7))
+    #     intPaddingTop = int((intHeight_pad - intHeight) / 2)
+    #     intPaddingBottom = intHeight_pad - intHeight - intPaddingTop
+    # else:
+    #     intHeight_pad = intHeight
+    #     intPaddingTop = 32
+    #     intPaddingBottom = 32
     if intWidth != ((intWidth >> 7) << 7):
-        # intWidth_pad = ((np.ceil(intWidth >> 7)) << 7)  # more than necessary
-        intWidth_pad = int(2 ** 7 * np.ceil(float(intWidth) / 2 ** 7))
+        intWidth_pad = (((intWidth >> 7) + 1) << 7)  # more than necessary
         intPaddingLeft =int(( intWidth_pad - intWidth)/2)
         intPaddingRight = intWidth_pad - intWidth - intPaddingLeft
     else:
@@ -130,8 +157,7 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
         intPaddingRight= 32
 
     if intHeight != ((intHeight >> 7) << 7):
-        # intHeight_pad = ((np.ceil(intHeight >> 7)) << 7)  # more than necessary
-        intHeight_pad = int(2 ** 7 * np.ceil(float(intHeight) / 2 ** 7))
+        intHeight_pad = (((intHeight >> 7) + 1) << 7)  # more than necessary
         intPaddingTop = int((intHeight_pad - intHeight) / 2)
         intPaddingBottom = intHeight_pad - intHeight - intPaddingTop
     else:
@@ -141,7 +167,6 @@ for (arguments_strFirst, arguments_strSecond, arguments_strOut) in triplet_filep
 
     pader = torch.nn.ReplicationPad2d([intPaddingLeft, intPaddingRight , intPaddingTop, intPaddingBottom])
 
-    torch.set_grad_enabled(False)
     X0 = Variable(torch.unsqueeze(X0,0))
     X1 = Variable(torch.unsqueeze(X1,0))
     X0 = pader(X0)
